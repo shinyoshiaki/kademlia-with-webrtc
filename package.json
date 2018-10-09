@@ -44,12 +44,7 @@
     "build": "NODE_ENV=production babel src --out-dir lib --source-maps inline",
     "server": "yarn build && node ./lib/cli/wrap"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://shinyoshiaki@bitbucket.org/shinyoshiaki/kademlia-js.git"
-  },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "homepage": "https://bitbucket.org/shinyoshiaki/kademlia-js#readme"
+  "license": "ISC"
 }
