@@ -15,7 +15,7 @@ export default {
   SEND: "SEND"
 };
 
-export function networkFormat(nodeId, type, data) {
+export function networkFormat(nodeId: string, type: string, data: any) {
   let packet = {
     layer: "networkLayer",
     type: type,
@@ -24,6 +24,6 @@ export function networkFormat(nodeId, type, data) {
     date: Date.now(),
     hash: ""
   };
-  packet.hash = sha1(JSON.stringify(packet));
+  packet.hash = sha1(JSON.stringify(packet)).toString();
   return JSON.stringify(packet);
 }

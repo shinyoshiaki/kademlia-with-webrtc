@@ -1,46 +1,54 @@
 require("babel-polyfill");
-import WebRTC from "simple-datachannel";
-import Helper from "./KUtil";
-import KResponder from "./KResponder";
+import WebRTC from "webrtc4me";
+import Helper from "./kUtil";
+import KResponder from "./kResponder";
 import def, { networkFormat } from "./KConst";
+import { distance } from "kad-distance";
 
 export default class Kademlia {
-  constructor(_nodeId = null) {
-    if (_nodeId !== null) {
-      console.log("start kad", _nodeId);
-      this.k = 20;
-      this.nodeId = _nodeId;
-      this.dataList = [];
-      this.keyValueList = [];
-      this.ref = {};
+  nodeId: string;
+  k: number;
+  kbuckets: Array<Array<WebRTC>>;
+  f: Helper;
+  responder: KResponder;
+  dataList: Array<any> = [];
+  keyValueList: { [key: string]: any } = {};
+  ref: { [key: string]: WebRTC } = {};
+  state = {
+    isOffer: false,
+    findNode: "",
+    hash: {}
+  };
 
-      this.state = {
-        isOffer: false,
-        findNode: "",
-        hash: {}
-      };
+  private onPing: { [key: string]: () => void } = {};
 
-      this.callback = {
-        onAddPeer: () => {},
-        onPeerDisconnect: () => {},
-        onCommand: () => {},
-        onFindValue: () => {},
-        onFindNode: () => {},
-        onPingArr: { sample: () => {} }
-      };
+  callback = {
+    onAddPeer: (v?: any) => {},
+    onPeerDisconnect: (v?: any) => {},
+    onCommand: (v?: any) => {},
+    onFindValue: (v?: any) => {},
+    onFindNode: (v?: any) => {},
+    onStore: (v?: any) => {},
+    _onPing: this.onPing
+  };
 
-      this.kbuckets = new Array(160);
-      for (let i = 0; i < 160; i++) {
-        let kbucket = [];
-        this.kbuckets[i] = kbucket;
-      }
+  constructor(_nodeId: string, opt?: { kLength?: number }) {
+    console.log("start kad", _nodeId);
+    this.k = 20;
+    if (opt) if (opt.kLength) this.k = opt.kLength;
+    this.nodeId = _nodeId;
 
-      this.f = new Helper(this.k, this.kbuckets);
-      this.kresponder = new KResponder(this);
+    this.kbuckets = new Array(160);
+    for (let i = 0; i < 160; i++) {
+      let kbucket: Array<any> = [];
+      this.kbuckets[i] = kbucket;
     }
+
+    this.f = new Helper(this.k, this.kbuckets);
+    this.responder = new KResponder(this);
   }
 
-  ping(peer) {
+  ping(peer: WebRTC) {
     return new Promise((resolve, reject) => {
       console.log("ping", peer.nodeId);
 
@@ -50,12 +58,12 @@ export default class Kademlia {
         peer.isDisconnected = true;
         this.f.cleanDiscon();
         this.callback.onPeerDisconnect(this.kbuckets);
-        reject("ping timeout");
+        reject("ping timeout " + peer.nodeId);
       }, 10 * 1000);
 
       //ping完了時のコールバック
-      this.callback.onPingArr[peer.nodeId] = () => {
-        console.log("ping success");
+      this.callback._onPing[peer.nodeId] = () => {
+        console.log("ping success", peer.nodeId);
         clearTimeout(timeout);
         resolve(true);
       };
@@ -67,7 +75,7 @@ export default class Kademlia {
     });
   }
 
-  storeFormat(sender, key, value) {
+  storeFormat(sender: string, key: string, value: any) {
     const sendData = {
       sender,
       key,
@@ -76,73 +84,62 @@ export default class Kademlia {
     return networkFormat(this.nodeId, def.STORE, sendData);
   }
 
-  async store(sender, key, value) {
+  async store(sender: string, key: string, value: any) {
     //自分に一番近いピアを取得
     const peer = this.f.getCloseEstPeer(key);
-
+    if (!peer) return;
     console.log(def.STORE, "next", peer.nodeId, "target", key);
-    //取得したピアにping
-    const result = await this.ping(peer).catch(console.log);
-
-    if (result) {
-      //storeを送る
-      peer.send(this.storeFormat(sender, key, value), "kad");
-      console.log("store done", this.storeFormat(sender, key, value));
-    } else {
-      console.log("store faile");
-    }
+    peer.send(this.storeFormat(sender, key, value), "kad");
+    console.log("store done", this.storeFormat(sender, key, value));
   }
 
-  async findNode(targetId, peer) {
+  async findNode(targetId: string, peer: WebRTC) {
     console.log("findnode");
     //接続確認
-    const result = await this.ping(peer).catch(console.log);
-    if (result) {
-      console.log("findnode", targetId);
-      this.state.findNode = targetId;
-      const sendData = { targetKey: targetId };
-      //送る
-      peer.send(networkFormat(this.nodeId, def.FINDNODE, sendData), "kad");
-    }
+    const ping = this.ping(peer).catch(console.log);
+    if (!ping) return;
+    console.log("findnode", targetId);
+    this.state.findNode = targetId;
+    const sendData = { targetKey: targetId };
+    //送る
+    peer.send(networkFormat(this.nodeId, def.FINDNODE, sendData), "kad");
   }
 
-  findValue(key, cb = () => {}) {
+  findValue(key: string, cb = (value: any) => {}) {
     this.callback.onFindValue = cb;
     //keyに近いピアを取得
-    const peers = this.f.getClosePeers(key);
-    for (let peer in peers) {
-      //findvalueの実体
-      this.doFindvalue(key, peer);
-    }
+    // const peers = this.f.getClosePeers(key);
+    // peers.forEach(peer => {
+    //   this.doFindvalue(key, peer);
+    // });
+    const peer = this.f.getCloseEstPeer(key);
+    if (!peer) return;
+    this.doFindvalue(key, peer);
   }
 
-  async doFindvalue(key, peer) {
-    const result = await this.ping(peer).catch(console.log);
-    if (result) {
-      //送る
-      peer.send(
-        networkFormat(this.nodeId, def.FINDVALUE, {
-          targetKey: key
-        }),
-        "kad"
-      );
-    }
+  async doFindvalue(key: string, peer: WebRTC) {
+    console.log("dofindvalue", peer.nodeId);
+    peer.send(
+      networkFormat(this.nodeId, def.FINDVALUE, {
+        targetKey: key
+      }),
+      "kad"
+    );
   }
 
-  addknode(peer) {
-    peer.ev.on("data", data => {
-      console.log("on data", data);
-      this.onCommand(data);
-    });
+  addknode(peer: WebRTC) {
+    peer.data = raw => {
+      this.onCommand(raw);
+    };
 
-    peer.ev.on("disconnect", () => {
+    peer.disconnect = () => {
       console.log("kad node disconnected");
       this.f.cleanDiscon();
-    });
+    };
 
     if (!this.f.isNodeExist(peer.nodeId)) {
       //自分のノードIDと追加するノードIDの距離
-      const num = this.f.distance(this.nodeId, peer.nodeId);
+      const num = distance(this.nodeId, peer.nodeId);
       //kbucketsの該当する距離のkbucketを呼び出す
       const kbucket = this.kbuckets[num];
       //該当するkbucketに新しいピアを加える
@@ -155,11 +152,11 @@ export default class Kademlia {
         this.findNewPeer(peer);
       }, 1000);
 
-      this.callback.onAddPeer(this.kbuckets);
+      this.callback.onAddPeer(this.f.getAllPeerIds());
     }
   }
 
-  findNewPeer(peer) {
+  findNewPeer(peer: WebRTC) {
     if (this.f.getKbucketNum() < this.k) {
       //自身のノードIDをkeyとしてFIND_NODE
       this.findNode(this.nodeId, peer);
@@ -168,14 +165,14 @@ export default class Kademlia {
     }
   }
 
-  onRequest(datalink) {
+  onRequest(datalink: string) {
     const network = JSON.parse(datalink);
-    this.kresponder.response(network.type, network);
+    this.responder.response(network.type, network);
     this.maintain(network);
   }
 
-  async maintain(network) {
-    const inx = this.f.distance(this.nodeId, network.nodeId);
+  async maintain(network: any) {
+    const inx = distance(this.nodeId, network.nodeId);
     const kbucket = this.kbuckets[inx];
 
     //送信元が該当するk-bucketの中にあった場合
@@ -200,66 +197,66 @@ export default class Kademlia {
     }
   }
 
-  offer(target, proxy = null) {
+  offer(target: string, proxy = null) {
     return new Promise((resolve, reject) => {
       const r = this.ref;
       const peer = (r[target] = new WebRTC());
       peer.makeOffer();
-      peer.connecting(target);
 
       const timeout = setTimeout(() => {
         reject("kad offer timeout");
       }, 10 * 1000);
 
-      peer.ev.on("signal", sdp => {
+      peer.signal = sdp => {
         console.log("kad offer store", target);
-        if (this.f.getCloseEstPeer(target).nodeId !== target)
+        const _ = this.f.getCloseEstPeer(target);
+        if (!_) return;
+        if (_.nodeId !== target)
           this.store(this.nodeId, target, { sdp, proxy });
-      });
+      };
 
-      peer.ev.on("connect", () => {
+      peer.connect = () => {
+        peer.nodeId = target;
         console.log("kad offer connected", target);
         this.addknode(peer);
         clearTimeout(timeout);
         resolve(true);
-      });
+      };
     });
   }
 
-  answer(target, sdp, proxy = null) {
+  answer(target: string, sdp: string, proxy: string) {
     return new Promise((resolve, reject) => {
       const r = this.ref;
       const peer = (r[target] = new WebRTC());
       peer.makeAnswer(sdp);
-      peer.connecting(target);
       console.log("kad answer", target);
 
       const timeout = setTimeout(() => {
         reject("kad answer timeout");
       }, 10 * 1000);
 
-      peer.ev.on("signal", sdp => {
-        this.f
-          .getPeerFromnodeId(proxy)
-          .send(this.storeFormat(this.nodeId, target, { sdp }), "kad");
-      });
+      peer.signal = sdp => {
+        const _ = this.f.getPeerFromnodeId(proxy);
+        if (_) _.send(this.storeFormat(this.nodeId, target, { sdp }), "kad");
+      };
 
-      peer.ev.on("connect", () => {
+      peer.connect = () => {
+        peer.nodeId = target;
         console.log("kad answer connected", target);
         this.addknode(peer);
         clearTimeout(timeout);
         resolve(true);
-      });      
+      };
     });
   }
 
-  send(target, data) {
-    this.f
-      .getPeerFromnodeId(target)
-      .send(networkFormat(this.nodeId, def.SEND, data), "kad");
+  send(target: string, data: any) {
+    const _ = this.f.getPeerFromnodeId(target);
+    if (_) _.send(networkFormat(this.nodeId, def.SEND, data), "kad");
   }
 
-  onCommand(datachannel) {
+  onCommand(datachannel: any) {
     const dataLink = datachannel.data;
     const networkLayer = JSON.parse(dataLink);
 

@@ -1,4 +1,5 @@
-import PortalNode from "../node/PortalNode";
+import "source-map-support/register";
+import PortalNode from "../node/portalNode";
 import inquire from "inquirer";
 
 const quesMyPort = {
@@ -9,14 +10,14 @@ const quesMyPort = {
 const quesAddress = {
   type: "input",
   name: "address",
-  message: "ip address"
+  message: "target address"
 };
 const quesPort = {
   type: "input",
   name: "port",
-  message: "port"
+  message: "target port"
 };
-inquire.prompt([quesMyPort, quesAddress, quesPort]).then(answer => {
+inquire.prompt([quesMyPort, quesAddress, quesPort]).then((answer: any) => {
   console.log(`test:${answer.myPort}:${answer.address}:${answer.port}`);
   new PortalNode(answer.myPort, { address: answer.address, port: answer.port });
 });
